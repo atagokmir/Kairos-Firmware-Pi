@@ -14,11 +14,11 @@ add_library(kairos_lib STATIC
     src/stats_thread.cpp
 )
 target_include_directories(kairos_lib PUBLIC src)
-target_link_libraries(kairos_lib PUBLIC pthread)
+target_link_libraries(kairos_lib PRIVATE pthread)
 
 # Main executable
 add_executable(kairos src/main.cpp)
-target_link_libraries(kairos PRIVATE kairos_lib)
+target_link_libraries(kairos PRIVATE kairos_lib pthread)
 
 # Google Test via FetchContent
 include(FetchContent)
