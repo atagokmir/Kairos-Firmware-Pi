@@ -11,11 +11,9 @@
 #include "stats_thread.hpp"
 
 static std::atomic<bool> g_running{true};
-static CycleQueue*        g_queue_ptr = nullptr;
 
 static void signal_handler(int) {
     g_running = false;
-    if (g_queue_ptr) g_queue_ptr->stop();
 }
 
 int main(int argc, char* argv[]) {
@@ -31,18 +29,17 @@ int main(int argc, char* argv[]) {
     Config cfg = load_config_file(config_path);
     apply_args(cfg, argc, argv);
 
+    std::signal(SIGINT,  signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
     Logger      logger(cfg.log_path);
     CycleQueue  queue;
     SharedState state;
-    g_queue_ptr = &queue;
 
     logger.info("Kairos starting. port=" + cfg.port +
                 " window=" + std::to_string(cfg.window_size) +
                 " min_samples=" + std::to_string(cfg.min_samples) +
                 " threshold=" + std::to_string(cfg.anomaly_threshold));
-
-    std::signal(SIGINT,  signal_handler);
-    std::signal(SIGTERM, signal_handler);
 
     std::thread serial_t(serial_thread_func,
                          std::cref(cfg), std::ref(queue),

@@ -75,4 +75,6 @@ void serial_thread_func(const Config&      cfg,
 
         ::close(fd);
     }
+
+    queue.stop();  // Unblock stats_thread so it can exit
 }

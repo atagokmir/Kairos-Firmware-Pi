@@ -11,7 +11,8 @@ void stats_thread_func(const Config&      cfg,
     uint64_t cycle_count   = 0;
     uint64_t anomaly_count = 0;
 
-    while (running.load()) {
+    (void)running;  // stats_thread exits when queue is stopped
+    while (true) {
         uint32_t cycle = 0;
         if (!queue.wait_and_pop(cycle)) break;  // queue stopped
 
@@ -22,6 +23,13 @@ void stats_thread_func(const Config&      cfg,
             logger.info("Warming up... samples=" +
                         std::to_string(window.size()) + "/" +
                         std::to_string(cfg.min_samples));
+            // Still update cycle count in SharedState so readers can see progress
+            {
+                std::unique_lock lock(state.mtx);
+                state.last_cycle  = cycle;
+                state.cycle_count = cycle_count;
+                // warming_up stays true (default)
+            }
             continue;
         }
 
