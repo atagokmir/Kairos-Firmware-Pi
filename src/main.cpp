@@ -29,6 +29,12 @@ int main(int argc, char* argv[]) {
     Config cfg = load_config_file(config_path);
     apply_args(cfg, argc, argv);
 
+    // Validate required non-zero config values
+    if (cfg.summary_interval == 0 || cfg.window_size == 0 || cfg.min_samples == 0) {
+        std::cerr << "[ERROR] summary_interval, window_size, and min_samples must be >= 1\n";
+        return 1;
+    }
+
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
 
