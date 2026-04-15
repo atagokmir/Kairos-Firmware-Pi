@@ -28,8 +28,8 @@ std::string Logger::timestamp() {
 }
 
 void Logger::write(const std::string& level, const std::string& msg) {
-    std::string line = timestamp() + " [" + level + "] " + msg + "\n";
     std::lock_guard<std::mutex> lock(mtx_);
+    std::string line = timestamp() + " [" + level + "] " + msg + "\n";
     if (stdout_enabled_) std::cout << line << std::flush;
     if (file_.is_open()) { file_ << line; file_.flush(); }
 }
@@ -40,22 +40,22 @@ void Logger::warn(const std::string& msg) { write("WARN", msg); }
 void Logger::anomaly(uint32_t cycle, double mean, double sigma,
                      double ucl, double lcl) {
     std::ostringstream ss;
-    ss << "cycle="  << cycle
-       << "us  mean=" << static_cast<uint64_t>(mean)
-       << "us  UCL="  << static_cast<uint64_t>(ucl)
-       << "us  LCL="  << static_cast<uint64_t>(lcl)
-       << "us  sigma=" << static_cast<uint64_t>(sigma) << "us";
+    ss << "cycle=" << cycle
+       << "us mean=" << static_cast<uint64_t>(mean)
+       << "us UCL=" << static_cast<uint64_t>(ucl)
+       << "us LCL=" << static_cast<uint64_t>(lcl)
+       << "us sigma=" << static_cast<uint64_t>(sigma) << "us";
     write("ANOMALY", ss.str());
 }
 
 void Logger::summary(uint64_t count, double mean, double sigma,
                      double ucl, double lcl, uint64_t anomaly_count) {
     std::ostringstream ss;
-    ss << "count="      << count
-       << "  mean="     << static_cast<uint64_t>(mean)  << "us"
-       << "  sigma="    << static_cast<uint64_t>(sigma) << "us"
-       << "  UCL="      << static_cast<uint64_t>(ucl)   << "us"
-       << "  LCL="      << static_cast<uint64_t>(lcl)   << "us"
-       << "  anomalies=" << anomaly_count;
+    ss << "count=" << count
+       << " mean=" << static_cast<uint64_t>(mean) << "us"
+       << " sigma=" << static_cast<uint64_t>(sigma) << "us"
+       << " UCL=" << static_cast<uint64_t>(ucl) << "us"
+       << " LCL=" << static_cast<uint64_t>(lcl) << "us"
+       << " anomalies=" << anomaly_count;
     write("SUMMARY", ss.str());
 }
