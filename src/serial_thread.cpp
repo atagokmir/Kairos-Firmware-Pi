@@ -10,8 +10,8 @@ static void configure_serial(int fd) {
     struct termios tty{};
     tcgetattr(fd, &tty);
     cfmakeraw(&tty);
-    tty.c_cc[VMIN]  = 0;   // non-blocking read
-    tty.c_cc[VTIME] = 10;  // 1 second timeout (0.1s * 10)
+    tty.c_cc[VMIN]  = 0;  // non-blocking read
+    tty.c_cc[VTIME] = 1;  // 100ms timeout — fast command response
     tcsetattr(fd, TCSANOW, &tty);
 }
 
@@ -28,7 +28,8 @@ static bool parse_cycle_line(const std::string& line, uint32_t& out) {
 }
 
 void serial_thread_func(const Config&      cfg,
-                        CycleQueue&        queue,
+                        CycleQueue&        cycle_queue,
+                        CommandQueue&      cmd_queue,
                         Logger&            logger,
                         std::atomic<bool>& running) {
     int backoff_s = 1;
@@ -38,7 +39,6 @@ void serial_thread_func(const Config&      cfg,
         if (fd < 0) {
             logger.warn("Cannot open " + cfg.port +
                         ". Retrying in " + std::to_string(backoff_s) + "s...");
-            // Sleep in small increments so we can respond to shutdown quickly
             for (int i = 0; i < backoff_s * 10 && running.load(); ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             backoff_s = std::min(backoff_s * 2, 30);
@@ -53,17 +53,24 @@ void serial_thread_func(const Config&      cfg,
         char        buf[1];
 
         while (running.load()) {
+            // Drain outgoing command queue before each read
+            std::string cmd;
+            while (cmd_queue.try_pop(cmd)) {
+                ::write(fd, cmd.c_str(), cmd.size());
+                logger.info("Serial → Pico: " + cmd.substr(0, cmd.size()-1));
+            }
+
             ssize_t n = ::read(fd, buf, 1);
             if (n < 0) {
                 logger.warn("Read error on " + cfg.port + ". Reconnecting...");
                 break;
             }
-            if (n == 0) continue;  // timeout — try again
+            if (n == 0) continue;  // 100ms timeout — loop back to check cmd_queue
 
             if (buf[0] == '\n') {
                 uint32_t cycle = 0;
                 if (parse_cycle_line(line, cycle)) {
-                    queue.push(cycle);
+                    cycle_queue.push(cycle);
                 } else if (!line.empty()) {
                     logger.warn("Malformed line: " + line);
                 }
@@ -76,5 +83,5 @@ void serial_thread_func(const Config&      cfg,
         ::close(fd);
     }
 
-    queue.stop();  // Unblock stats_thread so it can exit
+    cycle_queue.stop();  // Unblock stats_thread so it can exit
 }
