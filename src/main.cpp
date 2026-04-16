@@ -10,6 +10,10 @@
 #include "serial_thread.hpp"
 #include "stats_thread.hpp"
 
+#ifdef KAIROS_DISPLAY
+#include "display_thread.hpp"
+#endif
+
 static std::atomic<bool> g_running{true};
 
 static void signal_handler(int) {
@@ -55,6 +59,14 @@ int main(int argc, char* argv[]) {
                         std::cref(cfg), std::ref(queue),
                         std::ref(state), std::ref(logger),
                         std::ref(g_running));
+
+#ifdef KAIROS_DISPLAY
+    // On macOS, SDL2 must run on the main thread (Cocoa requirement).
+    // Display runs here; serial and stats run in background threads above.
+    display_thread_func(cfg, state, logger, g_running);
+    g_running = false;
+    queue.stop();
+#endif
 
     serial_t.join();
     stats_t.join();

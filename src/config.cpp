@@ -34,6 +34,9 @@ Config load_config_file(const std::string& path) {
         else if (key == "summary_interval")  try { cfg.summary_interval  = std::stoul(val); } catch (...) {}
         else if (key == "log_path")          cfg.log_path          = val;
         else if (key == "anomaly_threshold") try { cfg.anomaly_threshold = std::stod(val);  } catch (...) {}
+        else if (key == "machine_id")        cfg.machine_id        = val;
+        else if (key == "line_id")           cfg.line_id           = val;
+        else if (key == "idle_timeout_s")    try { cfg.idle_timeout_s    = std::stoi(val);  } catch (...) {}
     }
     return cfg;
 }

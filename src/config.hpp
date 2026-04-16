@@ -9,6 +9,11 @@ struct Config {
     std::size_t summary_interval  = 50;
     std::string log_path          = "/var/log/kairos/kairos.log";
     double      anomaly_threshold = 3.0;
+
+    // Display / HMI
+    std::string machine_id        = "MAKINE 01";
+    std::string line_id           = "HAT A";
+    int         idle_timeout_s    = 35;
 };
 
 // Load from INI file. Missing keys use Config defaults.
