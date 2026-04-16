@@ -39,7 +39,7 @@ TEST(LoggerTest, WarnContainsLevel) {
 TEST(LoggerTest, AnomalyContainsAllFields) {
     const std::string path = "/tmp/kairos_test_anomaly.log";
     std::remove(path.c_str());
-    { Logger log(path, false); log.anomaly(1250000, 1000000.0, 40000.0, 1120000.0, 880000.0); }
+    { Logger log(path, false); log.anomaly(1250000, 1000000.0, 40000.0, 1120000.0, 880000.0, 50000.0, 200000.0); }
     std::string line = read_last_line(path);
     EXPECT_NE(line.find("[ANOMALY]"), std::string::npos);
     EXPECT_NE(line.find("1250000"),   std::string::npos);

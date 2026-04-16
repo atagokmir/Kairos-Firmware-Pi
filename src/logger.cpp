@@ -38,13 +38,16 @@ void Logger::info(const std::string& msg) { write("INFO", msg); }
 void Logger::warn(const std::string& msg) { write("WARN", msg); }
 
 void Logger::anomaly(uint32_t cycle, double mean, double sigma,
-                     double ucl, double lcl) {
+                     double ucl, double lcl,
+                     double mr, double ucl_mr) {
     std::ostringstream ss;
-    ss << "cycle=" << cycle
-       << "us mean=" << static_cast<uint64_t>(mean)
-       << "us UCL=" << static_cast<uint64_t>(ucl)
-       << "us LCL=" << static_cast<uint64_t>(lcl)
-       << "us sigma=" << static_cast<uint64_t>(sigma) << "us";
+    ss << "cycle=" << cycle << "us"
+       << " mean=" << static_cast<uint64_t>(mean) << "us"
+       << " UCL=" << static_cast<uint64_t>(ucl) << "us"
+       << " LCL=" << static_cast<uint64_t>(lcl) << "us"
+       << " sigma=" << static_cast<uint64_t>(sigma) << "us"
+       << " MR=" << static_cast<uint64_t>(mr) << "us"
+       << " UCL_MR=" << static_cast<uint64_t>(ucl_mr) << "us";
     write("ANOMALY", ss.str());
 }
 

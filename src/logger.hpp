@@ -11,7 +11,9 @@ public:
 
     void info(const std::string& msg);
     void warn(const std::string& msg);
-    void anomaly(uint32_t cycle, double mean, double sigma, double ucl, double lcl);
+    void anomaly(uint32_t cycle, double mean, double sigma,
+                 double ucl, double lcl,
+                 double mr, double ucl_mr);   // MR chart values
     void summary(uint64_t count, double mean, double sigma,
                  double ucl, double lcl, uint64_t anomaly_count);
 

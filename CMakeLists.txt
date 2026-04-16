@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(kairos_lib STATIC
     src/config.cpp
     src/rolling_window.cpp
+    src/imr_window.cpp
     src/logger.cpp
     src/serial_thread.cpp
     src/stats_thread.cpp
