@@ -63,24 +63,17 @@ static lv_chart_series_t *g_mr_data = nullptr;
 static lv_chart_series_t *g_mr_ucl  = nullptr;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-// Format microseconds as e.g. "1.002.847 us" (ASCII only)
+// Format microseconds as seconds: "1.003 s"
 static std::string fmt_us(uint32_t us) {
     char buf[32];
-    if (us >= 1000000u) {
-        std::snprintf(buf, sizeof(buf), "%u.%03u.%03u us",
-                      us / 1000000u, (us % 1000000u) / 1000u, us % 1000u);
-    } else if (us >= 1000u) {
-        std::snprintf(buf, sizeof(buf), "%u.%03u us",
-                      us / 1000u, us % 1000u);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%u us", us);
-    }
+    std::snprintf(buf, sizeof(buf), "%.3f s", us / 1.0e6);
     return buf;
 }
 
 static std::string fmt_double_us(double d) {
-    uint32_t v = (d < 0.0) ? 0u : static_cast<uint32_t>(d);
-    return fmt_us(v);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.3f s", (d < 0.0 ? 0.0 : d) / 1.0e6);
+    return buf;
 }
 
 static void panel_style(lv_obj_t *o) {
