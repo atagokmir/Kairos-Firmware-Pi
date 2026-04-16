@@ -46,15 +46,21 @@ static lv_obj_t *g_status_dot   = nullptr;
 static lv_obj_t *g_status_lbl   = nullptr;
 static lv_obj_t *g_cycle_lbl    = nullptr;
 static lv_obj_t *g_ucl_lbl      = nullptr;
-static lv_obj_t *g_mean_lbl     = nullptr;
+static lv_obj_t *g_mean_lbl     = nullptr;  // calibration X-bar (fixed)
 static lv_obj_t *g_lcl_lbl      = nullptr;
-static lv_obj_t *g_sigma_lbl    = nullptr;
+static lv_obj_t *g_sigma_lbl    = nullptr;  // calibration sigma (fixed)
+static lv_obj_t *g_live_lbl     = nullptr;  // live mean + sigma
 static lv_obj_t *g_prod_lbl     = nullptr;
 static lv_obj_t *g_anom_lbl     = nullptr;
 static lv_obj_t *g_state_lbl    = nullptr;
 static lv_obj_t *g_i_chart      = nullptr;
 static lv_obj_t *g_mr_chart     = nullptr;
 static lv_obj_t *g_mr_ucl_lbl   = nullptr;
+
+// Calibration snapshot (saved once when limits_locked becomes true)
+static double g_calib_mean  = 0.0;
+static double g_calib_sigma = 0.0;
+static bool   g_calib_saved = false;
 
 static lv_chart_series_t *g_i_data  = nullptr;
 static lv_chart_series_t *g_i_ucl   = nullptr;
@@ -174,15 +180,37 @@ static void create_ui() {
     panel_style(right);
 
     lv_obj_t *rt = lv_label_create(right);
-    lv_label_set_text(rt, "I CHART - KONTROL LIMITLERI");
+    lv_label_set_text(rt, "KONTROL LIMITLERI (kalibrasyon)");
     lv_obj_set_style_text_font(rt, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(rt, lv_color_hex(CLR_MUTED), 0);
     lv_obj_align(rt, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    kv_row(right, "UCL",   CLR_LIMIT, 22, &g_ucl_lbl);
-    kv_row(right, "X-bar", CLR_BLUE,  52, &g_mean_lbl);
-    kv_row(right, "LCL",   CLR_LIMIT, 82, &g_lcl_lbl);
-    kv_row(right, "Sigma", CLR_MUTED, 112, &g_sigma_lbl);
+    kv_row(right, "UCL",       CLR_LIMIT, 18, &g_ucl_lbl);
+    kv_row(right, "X-bar",     CLR_BLUE,  44, &g_mean_lbl);
+    kv_row(right, "LCL",       CLR_LIMIT, 70, &g_lcl_lbl);
+    kv_row(right, "Sigma",     CLR_MUTED, 96, &g_sigma_lbl);
+
+    // Divider
+    lv_obj_t *divider = lv_obj_create(right);
+    lv_obj_set_size(divider, 610, 1);
+    lv_obj_set_pos(divider, 0, 120);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(CLR_BORDER), 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(divider, 0, 0);
+    lv_obj_set_style_radius(divider, 0, 0);
+
+    // Live label
+    lv_obj_t *live_key = lv_label_create(right);
+    lv_label_set_text(live_key, "CANLI:");
+    lv_obj_set_style_text_font(live_key, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(live_key, lv_color_hex(CLR_WARN), 0);
+    lv_obj_align(live_key, LV_ALIGN_TOP_LEFT, 0, 125);
+
+    g_live_lbl = lv_label_create(right);
+    lv_label_set_text(g_live_lbl, "---");
+    lv_obj_set_style_text_font(g_live_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(g_live_lbl, lv_color_hex(CLR_TEXT), 0);
+    lv_obj_align(g_live_lbl, LV_ALIGN_TOP_RIGHT, 0, 125);
 
     // ── I Chart ─────────────────────────────────────────────────────────────
     lv_obj_t *i_panel = lv_obj_create(scr);
@@ -348,12 +376,27 @@ static void update_ui(const Snap &s) {
 
     // ── Control limits ────────────────────────────────────────────────────
     if (s.limits_locked) {
-        lv_label_set_text(g_ucl_lbl,   fmt_double_us(s.ucl).c_str());
-        lv_label_set_text(g_mean_lbl,  fmt_double_us(s.mean).c_str());
-        lv_label_set_text(g_lcl_lbl,   fmt_double_us(s.lcl < 0 ? 0 : s.lcl).c_str());
-        lv_label_set_text(g_sigma_lbl, fmt_double_us(s.sigma).c_str());
+        // Save calibration snapshot once
+        if (!g_calib_saved) {
+            g_calib_mean  = s.mean;
+            g_calib_sigma = s.sigma;
+            g_calib_saved = true;
+        }
 
-        char buf[48];
+        // Calibration values — set once, never change
+        lv_label_set_text(g_ucl_lbl,   fmt_double_us(s.ucl).c_str());
+        lv_label_set_text(g_mean_lbl,  fmt_double_us(g_calib_mean).c_str());
+        lv_label_set_text(g_lcl_lbl,   fmt_double_us(s.lcl < 0 ? 0 : s.lcl).c_str());
+        lv_label_set_text(g_sigma_lbl, fmt_double_us(g_calib_sigma).c_str());
+
+        char buf[80];
+        // Live mean + sigma
+        std::snprintf(buf, sizeof(buf), "Mean: %s  |  Sigma: %s",
+                      fmt_double_us(s.mean).c_str(),
+                      fmt_double_us(s.sigma).c_str());
+        lv_label_set_text(g_live_lbl, buf);
+
+        // MR UCL label
         std::snprintf(buf, sizeof(buf), "UCL_MR: %s", fmt_double_us(s.ucl_mr).c_str());
         lv_label_set_text(g_mr_ucl_lbl, buf);
     }
