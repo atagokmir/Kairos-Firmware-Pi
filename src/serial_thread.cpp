@@ -80,6 +80,11 @@ void serial_thread_func(const Config&      cfg,
             }
         }
 
+        // Clean shutdown: notify Pico to stop before closing port
+        if (!running.load()) {
+            ::write(fd, "STOP\n", 5);
+            logger.info("Serial → Pico: STOP");
+        }
         ::close(fd);
     }
 

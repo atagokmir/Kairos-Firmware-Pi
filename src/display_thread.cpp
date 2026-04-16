@@ -103,6 +103,9 @@ static lv_chart_series_t *g_mr_ucl  = nullptr;
 static lv_obj_t *g_prod_lbl      = nullptr;
 static lv_obj_t *g_anom_d_lbl    = nullptr;
 
+// Command queue pointer (set in display_thread_func, used by switch functions)
+static CommandQueue *g_cmd_queue  = nullptr;
+
 // Screensaver view
 static lv_obj_t *g_screensaver   = nullptr;
 
@@ -642,6 +645,8 @@ static void show_header() {
 }
 
 static void switch_to_screensaver() {
+    // Notify Pico to stop sending cycle data
+    if (g_cmd_queue) g_cmd_queue->push("STOP\n");
     hide_all();
     lv_obj_clear_flag(g_screensaver, LV_OBJ_FLAG_HIDDEN);
     g_mode = Mode::SCREENSAVER;
@@ -912,6 +917,8 @@ void display_thread_func(const Config&      cfg,
                          CommandQueue&      cmd_queue,
                          Logger&            logger,
                          std::atomic<bool>& running) {
+    g_cmd_queue = &cmd_queue;
+
     lv_init();
     platform_init();
 
