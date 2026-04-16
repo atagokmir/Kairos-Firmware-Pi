@@ -112,6 +112,7 @@ static lv_obj_t *g_screensaver   = nullptr;
 // Pre-production view
 static lv_obj_t *g_preprod       = nullptr;
 static bool      g_start_pressed = false;
+static bool      g_stop_pressed  = false;
 
 // Idle view container
 static lv_obj_t *g_idle          = nullptr;
@@ -189,6 +190,8 @@ static void series_const(lv_obj_t *chart, lv_chart_series_t *ser, int32_t val) {
 }
 
 
+static void on_stop_btn(lv_event_t *) { g_stop_pressed = true; }
+
 // ─── Header (always visible) ──────────────────────────────────────────────────
 static void create_header(const Config &cfg) {
     g_header = lv_obj_create(lv_screen_active());
@@ -217,7 +220,23 @@ static void create_header(const Config &cfg) {
 
     // Clock
     g_clock_lbl = lbl(hdr, "00:00:00", &lv_font_montserrat_20, C_MUTED);
-    lv_obj_align(g_clock_lbl, LV_ALIGN_RIGHT_MID, -170, 0);
+    lv_obj_align(g_clock_lbl, LV_ALIGN_RIGHT_MID, -340, 0);
+
+    // "URETIM BITTI" button — visible only in DETAIL/IDLE, handled in state machine
+    lv_obj_t *stop_btn = lv_obj_create(hdr);
+    lv_obj_set_size(stop_btn, 152, 32);
+    lv_obj_align(stop_btn, LV_ALIGN_RIGHT_MID, -172, 0);
+    lv_obj_set_style_bg_color(stop_btn, lv_color_hex(0x200a0a), 0);
+    lv_obj_set_style_bg_opa(stop_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(stop_btn, lv_color_hex(C_RED), 0);
+    lv_obj_set_style_border_width(stop_btn, 1, 0);
+    lv_obj_set_style_radius(stop_btn, 6, 0);
+    lv_obj_set_style_pad_all(stop_btn, 0, 0);
+    lv_obj_remove_flag(stop_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(stop_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(stop_btn, on_stop_btn, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *stop_lbl = lbl(stop_btn, "URETIM BITTI", &lv_font_montserrat_14, C_RED);
+    lv_obj_align(stop_lbl, LV_ALIGN_CENTER, 0, 0);
 
     // Status badge
     g_badge_box = lv_obj_create(hdr);
@@ -1002,6 +1021,22 @@ void display_thread_func(const Config&      cfg,
             last_activity = now;
             switch_to_detail();
             logger.info("Display: production started — START sent to Pico");
+        }
+
+        // "URETIM BITTI" button pressed (header button, visible in DETAIL/IDLE)
+        if (g_stop_pressed && (g_mode == Mode::DETAIL || g_mode == Mode::IDLE)) {
+            g_stop_pressed = false;
+            // Reset display state for next production run
+            g_calib_mean  = 0.0;
+            g_calib_sigma = 0.0;
+            g_calib_saved = false;
+            g_limits_drawn= false;
+            g_last_count  = 0;
+            g_prev_cycle  = 0;
+            g_has_prev    = false;
+            g_was_anomaly = false;
+            switch_to_screensaver();  // also sends STOP\n
+            logger.info("Display: production ended — STOP sent to Pico");
         }
 
         // Idle timeout (only in DETAIL mode)
