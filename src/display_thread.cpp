@@ -116,8 +116,7 @@ static uint64_t g_last_count  = 0;
 static uint32_t g_prev_cycle  = 0;
 static bool     g_has_prev    = false;
 static bool     g_limits_drawn= false;
-static bool     g_touch_flag   = false;  // idle view touch → return to detail
-static bool     g_detail_touch = false;  // detail view touch → reset idle timer
+// Touch handled via lv_indev_get_state() polling in display loop
 static bool     g_was_anomaly = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -174,8 +173,6 @@ static void series_const(lv_obj_t *chart, lv_chart_series_t *ser, int32_t val) {
     lv_chart_refresh(chart);
 }
 
-static void on_idle_touch(lv_event_t*)   { g_touch_flag   = true; }
-static void on_detail_touch(lv_event_t*) { g_detail_touch = true; }
 
 // ─── Header (always visible) ──────────────────────────────────────────────────
 static void create_header(const Config &cfg) {
@@ -231,8 +228,6 @@ static void create_detail(const Config &cfg) {
     g_detail = cont(lv_screen_active());
     lv_obj_set_pos(g_detail, 4, CONTENT_Y);
     lv_obj_set_size(g_detail, W-8, CONTENT_H);
-    lv_obj_add_flag(g_detail, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(g_detail, on_detail_touch, LV_EVENT_CLICKED, nullptr);
 
     // ── Left sidebar ──────────────────────────────────────────────────────
     lv_obj_t *sb = cont(g_detail);
@@ -321,14 +316,14 @@ static void create_detail(const Config &cfg) {
     lv_obj_set_style_pad_all(ip, 8, 0);
     lv_obj_remove_flag(ip, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl(ip, "I CHART  |  BIREYSEL DEGERLER", &lv_font_montserrat_14, C_MUTED);
-    // top-right: live ort + sigma
+    lv_obj_t *i_title = lbl(ip, "I CHART  |  BIREYSEL DEGERLER", &lv_font_montserrat_14, C_MUTED);
+    lv_obj_align(i_title, LV_ALIGN_TOP_LEFT, 0, 0);
     g_i_ort_lbl = lbl(ip, "ort: ---  |  s: ---", &lv_font_montserrat_14, C_MUTED);
     lv_obj_align(g_i_ort_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     g_i_chart = lv_chart_create(ip);
-    lv_obj_set_size(g_i_chart, rw-18, 175);
-    lv_obj_align(g_i_chart, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(g_i_chart, rw-18, 162);
+    lv_obj_set_pos(g_i_chart, 0, 22);  // below title row
     lv_chart_set_type(g_i_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(g_i_chart, CHART_POINTS);
     lv_chart_set_range(g_i_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 2000);
@@ -355,13 +350,14 @@ static void create_detail(const Config &cfg) {
     lv_obj_set_style_pad_all(mrp, 8, 0);
     lv_obj_remove_flag(mrp, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl(mrp, "MR CHART  |  HAREKETLI ARALIK", &lv_font_montserrat_14, C_MUTED);
+    lv_obj_t *mr_title = lbl(mrp, "MR CHART  |  HAREKETLI ARALIK", &lv_font_montserrat_14, C_MUTED);
+    lv_obj_align(mr_title, LV_ALIGN_TOP_LEFT, 0, 0);
     g_mr_ucl_lbl = lbl(mrp, "UCL_MR: ---", &lv_font_montserrat_14, C_RED);
     lv_obj_align(g_mr_ucl_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     g_mr_chart = lv_chart_create(mrp);
-    lv_obj_set_size(g_mr_chart, rw-18, 104);
-    lv_obj_align(g_mr_chart, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(g_mr_chart, rw-18, 96);
+    lv_obj_set_pos(g_mr_chart, 0, 22);  // below title row
     lv_chart_set_type(g_mr_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(g_mr_chart, CHART_POINTS);
     lv_chart_set_range(g_mr_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 500);
@@ -412,8 +408,6 @@ static void create_idle() {
     lv_obj_set_pos(g_idle, 4, CONTENT_Y);
     lv_obj_set_size(g_idle, W-8, CONTENT_H);
     lv_obj_add_flag(g_idle, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(g_idle, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(g_idle, on_idle_touch, LV_EVENT_CLICKED, nullptr);
 
     // Big status box
     g_idle_box = lv_obj_create(g_idle);
@@ -770,15 +764,20 @@ void display_thread_func(const Config&      cfg,
                             (s.lcl > 0 && static_cast<double>(s.last_cycle) < s.lcl);
         }
 
-        // Wake from idle on new cycle (silent, no timer reset)
-        if (s.cycle_count > g_last_count && g_mode == Mode::IDLE) {
-            // Data is flowing but no touch — stay in idle, just update content
-        }
-
-        // Detail view touch → reset idle timer
-        if (g_detail_touch) {
-            g_detail_touch = false;
-            last_activity  = now;
+        // Any touch anywhere resets idle timer and wakes from idle view
+        {
+            lv_indev_t *indev = lv_indev_get_next(nullptr);
+            while (indev) {
+                if (lv_indev_get_state(indev) == LV_INDEV_STATE_PR) {
+                    last_activity = now;
+                    if (g_mode == Mode::IDLE) {
+                        switch_to_detail();
+                        logger.info("Display: touch — switching to detail view");
+                    }
+                    break;
+                }
+                indev = lv_indev_get_next(indev);
+            }
         }
 
         // Idle timeout — based on inactivity (no touch), not data absence
@@ -787,14 +786,6 @@ void display_thread_func(const Config&      cfg,
         if (g_mode == Mode::DETAIL && idle_s >= cfg.idle_timeout_s) {
             switch_to_idle();
             logger.info("Display: idle timeout — switching to idle view");
-        }
-
-        // Idle view touch → return to detail and reset timer
-        if (g_touch_flag && g_mode == Mode::IDLE) {
-            g_touch_flag  = false;
-            last_activity = now;
-            switch_to_detail();
-            logger.info("Display: touch — switching to detail view");
         }
 
         // Header
