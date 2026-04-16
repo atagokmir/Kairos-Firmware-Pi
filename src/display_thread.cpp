@@ -122,10 +122,10 @@ static bool     g_was_anomaly = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 static std::string fmt_sec(uint32_t us) {
-    char b[24]; std::snprintf(b, sizeof(b), "%.3f s", us / 1e6); return b;
+    char b[24]; std::snprintf(b, sizeof(b), "%.2f s", us / 1e6); return b;
 }
 static std::string fmt_dsec(double us) {
-    char b[24]; std::snprintf(b, sizeof(b), "%.3f s", (us<0?0:us)/1e6); return b;
+    char b[24]; std::snprintf(b, sizeof(b), "%.2f s", (us<0?0:us)/1e6); return b;
 }
 
 static void panel(lv_obj_t *o, uint32_t bg = C_PANEL, int radius = 8) {
@@ -520,9 +520,9 @@ static void update_detail(const Snap &s, const Config &cfg) {
     if (s.cycle_count > 0) {
         lv_label_set_text(g_cycle_lbl, fmt_sec(s.last_cycle).c_str());
         if (g_calib_saved) {
-            double delta_s = (static_cast<double>(s.last_cycle) - g_calib_mean) / 1e6;
+            double delta_s = (static_cast<double>(s.last_cycle) - s.mean) / 1e6;
             char db[32];
-            std::snprintf(db, sizeof(db), "%+.3f s", delta_s);
+            std::snprintf(db, sizeof(db), "%+.2f s", delta_s);
             lv_label_set_text(g_delta_lbl, db);
             // Positive delta = slower than mean (bad → red)
             // Negative delta = faster than mean (good → green)
