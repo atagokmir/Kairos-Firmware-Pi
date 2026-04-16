@@ -116,7 +116,8 @@ static uint64_t g_last_count  = 0;
 static uint32_t g_prev_cycle  = 0;
 static bool     g_has_prev    = false;
 static bool     g_limits_drawn= false;
-static bool     g_touch_flag  = false;
+static bool     g_touch_flag   = false;  // idle view touch → return to detail
+static bool     g_detail_touch = false;  // detail view touch → reset idle timer
 static bool     g_was_anomaly = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -173,7 +174,8 @@ static void series_const(lv_obj_t *chart, lv_chart_series_t *ser, int32_t val) {
     lv_chart_refresh(chart);
 }
 
-static void on_idle_touch(lv_event_t*) { g_touch_flag = true; }
+static void on_idle_touch(lv_event_t*)   { g_touch_flag   = true; }
+static void on_detail_touch(lv_event_t*) { g_detail_touch = true; }
 
 // ─── Header (always visible) ──────────────────────────────────────────────────
 static void create_header(const Config &cfg) {
@@ -229,6 +231,8 @@ static void create_detail(const Config &cfg) {
     g_detail = cont(lv_screen_active());
     lv_obj_set_pos(g_detail, 4, CONTENT_Y);
     lv_obj_set_size(g_detail, W-8, CONTENT_H);
+    lv_obj_add_flag(g_detail, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_detail, on_detail_touch, LV_EVENT_CLICKED, nullptr);
 
     // ── Left sidebar ──────────────────────────────────────────────────────
     lv_obj_t *sb = cont(g_detail);
@@ -358,11 +362,13 @@ static void create_detail(const Config &cfg) {
     g_mr_chart = lv_chart_create(mrp);
     lv_obj_set_size(g_mr_chart, rw-18, 104);
     lv_obj_align(g_mr_chart, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_chart_set_type(g_mr_chart, LV_CHART_TYPE_BAR);
+    lv_chart_set_type(g_mr_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(g_mr_chart, CHART_POINTS);
     lv_chart_set_range(g_mr_chart, LV_CHART_AXIS_PRIMARY_Y, 0, 500);
     lv_obj_set_style_bg_color(g_mr_chart, lv_color_hex(C_PANEL), 0);
     lv_obj_set_style_border_width(g_mr_chart, 0, 0);
+    lv_obj_set_style_size(g_mr_chart, 4, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_line_width(g_mr_chart, 2, LV_PART_ITEMS);
 
     g_mr_data = lv_chart_add_series(g_mr_chart, lv_color_hex(C_AMBER), LV_CHART_AXIS_PRIMARY_Y);
     g_mr_ucl  = lv_chart_add_series(g_mr_chart, lv_color_hex(C_RED),   LV_CHART_AXIS_PRIMARY_Y);
@@ -523,7 +529,9 @@ static void update_detail(const Snap &s, const Config &cfg) {
             char db[32];
             std::snprintf(db, sizeof(db), "%+.3f s", delta_s);
             lv_label_set_text(g_delta_lbl, db);
-            uint32_t dc = (std::fabs(delta_s) > g_calib_sigma / 1e6) ? C_RED : C_GREEN;
+            // Positive delta = slower than mean (bad → red)
+            // Negative delta = faster than mean (good → green)
+            uint32_t dc = (delta_s > 0.0) ? C_RED : C_GREEN;
             lv_obj_set_style_text_color(g_delta_lbl, lv_color_hex(dc), 0);
         }
     }
@@ -762,13 +770,18 @@ void display_thread_func(const Config&      cfg,
                             (s.lcl > 0 && static_cast<double>(s.last_cycle) < s.lcl);
         }
 
-        // Activity tracking (reset on new cycle)
-        if (s.cycle_count > g_last_count) {
-            last_activity = now;
-            if (g_mode == Mode::IDLE) switch_to_detail();
+        // Wake from idle on new cycle (silent, no timer reset)
+        if (s.cycle_count > g_last_count && g_mode == Mode::IDLE) {
+            // Data is flowing but no touch — stay in idle, just update content
         }
 
-        // Idle timeout
+        // Detail view touch → reset idle timer
+        if (g_detail_touch) {
+            g_detail_touch = false;
+            last_activity  = now;
+        }
+
+        // Idle timeout — based on inactivity (no touch), not data absence
         auto idle_s = std::chrono::duration_cast<std::chrono::seconds>(
             now - last_activity).count();
         if (g_mode == Mode::DETAIL && idle_s >= cfg.idle_timeout_s) {
@@ -776,7 +789,7 @@ void display_thread_func(const Config&      cfg,
             logger.info("Display: idle timeout — switching to idle view");
         }
 
-        // Touch to wake
+        // Idle view touch → return to detail and reset timer
         if (g_touch_flag && g_mode == Mode::IDLE) {
             g_touch_flag  = false;
             last_activity = now;
