@@ -1,15 +1,18 @@
 /**
  * display_thread.cpp — Kairos HMI
  *
- * Two views:
- *   DETAIL: left sidebar + right I/MR charts + bottom stats bar
- *   IDLE:   big status text + 3 large cards (auto after idle_timeout_s with no new cycle)
+ * States:
+ *   SCREENSAVER: animated logo, touch → PRE_PROD
+ *   PRE_PROD:    machine info + "URETIME BASLA" button → sends START\n, go to DETAIL
+ *   DETAIL:      full I/MR dashboard
+ *   IDLE:        simplified big-status view (after idle_timeout_s of no touch)
  *
  * LVGL tick runs in a dedicated 1ms thread.
  * lv_timer_handler() runs in the caller's thread (must be main thread on macOS/SDL2).
  */
 
 #include "display_thread.hpp"
+#include "command_queue.hpp"
 
 #include <lvgl.h>
 #include <string>
@@ -51,11 +54,12 @@ static constexpr uint32_t C_AMBER   = 0xe3b341;
 static constexpr uint32_t C_BLUE    = 0x79c0ff;
 
 // ─── Mode ─────────────────────────────────────────────────────────────────────
-enum class Mode { DETAIL, IDLE };
-static Mode g_mode = Mode::DETAIL;
+enum class Mode { SCREENSAVER, PRE_PROD, DETAIL, IDLE };
+static Mode g_mode = Mode::SCREENSAVER;  // always start in screensaver
 
 // ─── Global widget handles ────────────────────────────────────────────────────
-// Header (shared)
+// Header (shared between DETAIL and IDLE modes)
+static lv_obj_t *g_header        = nullptr;
 static lv_obj_t *g_machine_lbl   = nullptr;
 static lv_obj_t *g_clock_lbl     = nullptr;
 static lv_obj_t *g_badge_box     = nullptr;
@@ -98,6 +102,17 @@ static lv_chart_series_t *g_mr_ucl  = nullptr;
 // Bottom bar
 static lv_obj_t *g_prod_lbl      = nullptr;
 static lv_obj_t *g_anom_d_lbl    = nullptr;
+
+// Command queue pointer (set in display_thread_func, used by switch functions)
+static CommandQueue *g_cmd_queue  = nullptr;
+
+// Screensaver view
+static lv_obj_t *g_screensaver   = nullptr;
+
+// Pre-production view
+static lv_obj_t *g_preprod       = nullptr;
+static bool      g_start_pressed = false;
+static bool      g_stop_pressed  = false;
 
 // Idle view container
 static lv_obj_t *g_idle          = nullptr;
@@ -175,9 +190,12 @@ static void series_const(lv_obj_t *chart, lv_chart_series_t *ser, int32_t val) {
 }
 
 
+static void on_stop_btn(lv_event_t *) { g_stop_pressed = true; }
+
 // ─── Header (always visible) ──────────────────────────────────────────────────
 static void create_header(const Config &cfg) {
-    lv_obj_t *hdr = lv_obj_create(lv_screen_active());
+    g_header = lv_obj_create(lv_screen_active());
+    lv_obj_t *hdr = g_header;
     lv_obj_set_pos(hdr, 0, 0);
     lv_obj_set_size(hdr, W, HDR_H);
     lv_obj_set_style_bg_color(hdr, lv_color_hex(C_PANEL), 0);
@@ -202,7 +220,23 @@ static void create_header(const Config &cfg) {
 
     // Clock
     g_clock_lbl = lbl(hdr, "00:00:00", &lv_font_montserrat_20, C_MUTED);
-    lv_obj_align(g_clock_lbl, LV_ALIGN_RIGHT_MID, -170, 0);
+    lv_obj_align(g_clock_lbl, LV_ALIGN_RIGHT_MID, -340, 0);
+
+    // "URETIM BITTI" button — visible only in DETAIL/IDLE, handled in state machine
+    lv_obj_t *stop_btn = lv_obj_create(hdr);
+    lv_obj_set_size(stop_btn, 152, 32);
+    lv_obj_align(stop_btn, LV_ALIGN_RIGHT_MID, -172, 0);
+    lv_obj_set_style_bg_color(stop_btn, lv_color_hex(0x200a0a), 0);
+    lv_obj_set_style_bg_opa(stop_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(stop_btn, lv_color_hex(C_RED), 0);
+    lv_obj_set_style_border_width(stop_btn, 1, 0);
+    lv_obj_set_style_radius(stop_btn, 6, 0);
+    lv_obj_set_style_pad_all(stop_btn, 0, 0);
+    lv_obj_remove_flag(stop_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(stop_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(stop_btn, on_stop_btn, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *stop_lbl = lbl(stop_btn, "URETIM BITTI", &lv_font_montserrat_14, C_RED);
+    lv_obj_align(stop_lbl, LV_ALIGN_CENTER, 0, 0);
 
     // Status badge
     g_badge_box = lv_obj_create(hdr);
@@ -457,18 +491,203 @@ static void create_idle() {
     lv_obj_align(footer, LV_ALIGN_BOTTOM_MID, 0, 0);
 }
 
+// ─── Animation callbacks ──────────────────────────────────────────────────────
+static void anim_y_cb(void *obj, int32_t v) {
+    lv_obj_set_y((lv_obj_t *)obj, v);
+}
+static void anim_opa_cb(void *obj, int32_t v) {
+    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+static void anim_w_cb(void *obj, int32_t v) {
+    lv_obj_set_width((lv_obj_t *)obj, v);
+    lv_obj_align((lv_obj_t *)obj, LV_ALIGN_CENTER, 0, 34);
+}
+
+// ─── Screensaver view ─────────────────────────────────────────────────────────
+static void create_screensaver(const Config &cfg) {
+    lv_obj_t *scr = lv_screen_active();
+
+    g_screensaver = cont(scr);
+    lv_obj_set_pos(g_screensaver, 0, 0);
+    lv_obj_set_size(g_screensaver, W, H);
+    lv_obj_set_style_bg_color(g_screensaver, lv_color_hex(0x080c14), 0);
+    lv_obj_set_style_bg_opa(g_screensaver, LV_OPA_COVER, 0);
+
+    // KAIROS logo
+    lv_obj_t *logo = lbl(g_screensaver, "KAIROS", &lv_font_montserrat_48, C_GREEN);
+    lv_obj_align(logo, LV_ALIGN_CENTER, 0, -60);
+    int32_t logo_y = lv_obj_get_y(logo);
+
+    // Float animation
+    lv_anim_t af;
+    lv_anim_init(&af);
+    lv_anim_set_var(&af, logo);
+    lv_anim_set_exec_cb(&af, anim_y_cb);
+    lv_anim_set_values(&af, logo_y - 14, logo_y + 14);
+    lv_anim_set_time(&af, 3200);
+    lv_anim_set_playback_time(&af, 3200);
+    lv_anim_set_repeat_count(&af, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&af, lv_anim_path_ease_in_out);
+    lv_anim_start(&af);
+
+    // Opacity pulse
+    lv_anim_t ao;
+    lv_anim_init(&ao);
+    lv_anim_set_var(&ao, logo);
+    lv_anim_set_exec_cb(&ao, anim_opa_cb);
+    lv_anim_set_values(&ao, 140, 255);
+    lv_anim_set_time(&ao, 2400);
+    lv_anim_set_playback_time(&ao, 2400);
+    lv_anim_set_delay(&ao, 400);
+    lv_anim_set_repeat_count(&ao, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&ao, lv_anim_path_ease_in_out);
+    lv_anim_start(&ao);
+
+    // Animated accent line below logo
+    lv_obj_t *line = lv_obj_create(g_screensaver);
+    lv_obj_set_size(line, 0, 2);
+    lv_obj_align(line, LV_ALIGN_CENTER, 0, 34);
+    lv_obj_set_style_bg_color(line, lv_color_hex(C_GREEN), 0);
+    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+    lv_obj_set_style_radius(line, 1, 0);
+
+    lv_anim_t aw;
+    lv_anim_init(&aw);
+    lv_anim_set_var(&aw, line);
+    lv_anim_set_exec_cb(&aw, anim_w_cb);
+    lv_anim_set_values(&aw, 0, 220);
+    lv_anim_set_time(&aw, 2000);
+    lv_anim_set_playback_time(&aw, 2000);
+    lv_anim_set_delay(&aw, 800);
+    lv_anim_set_repeat_count(&aw, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&aw, lv_anim_path_ease_in_out);
+    lv_anim_start(&aw);
+
+    // Machine info
+    std::string minfo = cfg.machine_id + "  |  " + cfg.line_id;
+    lv_obj_t *mach = lbl(g_screensaver, minfo.c_str(), &lv_font_montserrat_20, 0x2d3f50);
+    lv_obj_align(mach, LV_ALIGN_CENTER, 0, 70);
+
+    // Touch hint (slow fade)
+    lv_obj_t *hint = lbl(g_screensaver, "ekrana dokunun", &lv_font_montserrat_14, 0x1a2a3a);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -24);
+
+    lv_anim_t ah;
+    lv_anim_init(&ah);
+    lv_anim_set_var(&ah, hint);
+    lv_anim_set_exec_cb(&ah, anim_opa_cb);
+    lv_anim_set_values(&ah, 40, 160);
+    lv_anim_set_time(&ah, 2800);
+    lv_anim_set_playback_time(&ah, 2800);
+    lv_anim_set_delay(&ah, 1200);
+    lv_anim_set_repeat_count(&ah, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&ah, lv_anim_path_ease_in_out);
+    lv_anim_start(&ah);
+}
+
+// ─── Pre-production view ──────────────────────────────────────────────────────
+static void on_start_btn(lv_event_t *) { g_start_pressed = true; }
+
+static void create_preprod(const Config &cfg) {
+    g_preprod = cont(lv_screen_active());
+    lv_obj_set_pos(g_preprod, 0, 0);
+    lv_obj_set_size(g_preprod, W, H);
+    lv_obj_set_style_bg_color(g_preprod, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_opa(g_preprod, LV_OPA_COVER, 0);
+    lv_obj_add_flag(g_preprod, LV_OBJ_FLAG_HIDDEN);
+
+    // Machine info (large, centered above button)
+    lv_obj_t *mid = lbl(g_preprod, cfg.machine_id.c_str(), &lv_font_montserrat_32, C_TEXT);
+    lv_obj_align(mid, LV_ALIGN_CENTER, 0, -130);
+
+    lv_obj_t *lid = lbl(g_preprod, cfg.line_id.c_str(), &lv_font_montserrat_20, C_MUTED);
+    lv_obj_align(lid, LV_ALIGN_CENTER, 0, -82);
+
+    // Divider
+    lv_obj_t *div = lv_obj_create(g_preprod);
+    lv_obj_set_size(div, 400, 1);
+    lv_obj_align(div, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_style_bg_color(div, lv_color_hex(C_BORDER), 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(div, 0, 0);
+    lv_obj_set_style_radius(div, 0, 0);
+
+    // URETIME BASLA button
+    lv_obj_t *btn = lv_obj_create(g_preprod);
+    lv_obj_set_size(btn, 480, 110);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 30);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x0a2010), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(C_GREEN), 0);
+    lv_obj_set_style_border_width(btn, 2, 0);
+    lv_obj_set_style_radius(btn, 12, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, on_start_btn, LV_EVENT_CLICKED, nullptr);
+
+    // Button hover effect (pressed state)
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x163320), LV_STATE_PRESSED);
+
+    lv_obj_t *btn_lbl = lbl(btn, "URETIME BASLA", &lv_font_montserrat_32, C_GREEN);
+    lv_obj_align(btn_lbl, LV_ALIGN_CENTER, 0, 0);
+
+    // Button pulse animation
+    lv_anim_t ab;
+    lv_anim_init(&ab);
+    lv_anim_set_var(&ab, btn);
+    lv_anim_set_exec_cb(&ab, anim_opa_cb);
+    lv_anim_set_values(&ab, 200, 255);
+    lv_anim_set_time(&ab, 1200);
+    lv_anim_set_playback_time(&ab, 1200);
+    lv_anim_set_repeat_count(&ab, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&ab, lv_anim_path_ease_in_out);
+    lv_anim_start(&ab);
+
+    // Instruction hint
+    lv_obj_t *hint = lbl(g_preprod, "uretime baslamak icin butona basin", &lv_font_montserrat_14, C_MUTED);
+    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 120);
+}
+
 // ─── Mode switch ──────────────────────────────────────────────────────────────
+static void hide_all() {
+    if (g_header)      lv_obj_add_flag(g_header,      LV_OBJ_FLAG_HIDDEN);
+    if (g_screensaver) lv_obj_add_flag(g_screensaver, LV_OBJ_FLAG_HIDDEN);
+    if (g_preprod)     lv_obj_add_flag(g_preprod,     LV_OBJ_FLAG_HIDDEN);
+    if (g_detail)      lv_obj_add_flag(g_detail,      LV_OBJ_FLAG_HIDDEN);
+    if (g_idle)        lv_obj_add_flag(g_idle,        LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_header() {
+    if (g_header) lv_obj_clear_flag(g_header, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void switch_to_screensaver() {
+    // Notify Pico to stop sending cycle data
+    if (g_cmd_queue) g_cmd_queue->push("STOP\n");
+    hide_all();
+    lv_obj_clear_flag(g_screensaver, LV_OBJ_FLAG_HIDDEN);
+    g_mode = Mode::SCREENSAVER;
+}
+
+static void switch_to_preprod() {
+    hide_all();
+    lv_obj_clear_flag(g_preprod, LV_OBJ_FLAG_HIDDEN);
+    g_mode = Mode::PRE_PROD;
+}
+
 static void switch_to_idle() {
-    if (g_mode == Mode::IDLE) return;
-    lv_obj_add_flag(g_detail, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(g_idle,  LV_OBJ_FLAG_HIDDEN);
+    hide_all();
+    show_header();
+    lv_obj_clear_flag(g_idle, LV_OBJ_FLAG_HIDDEN);
     g_mode = Mode::IDLE;
 }
 
 static void switch_to_detail() {
-    if (g_mode == Mode::DETAIL) return;
+    hide_all();
+    show_header();
     lv_obj_clear_flag(g_detail, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(g_idle,    LV_OBJ_FLAG_HIDDEN);
     g_mode = Mode::DETAIL;
 }
 
@@ -714,8 +933,11 @@ static void platform_init() {
 // ─── Thread entry ─────────────────────────────────────────────────────────────
 void display_thread_func(const Config&      cfg,
                          SharedState&       state,
+                         CommandQueue&      cmd_queue,
                          Logger&            logger,
                          std::atomic<bool>& running) {
+    g_cmd_queue = &cmd_queue;
+
     lv_init();
     platform_init();
 
@@ -726,9 +948,17 @@ void display_thread_func(const Config&      cfg,
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
 
+    // Screensaver and pre-prod are full-screen (no header)
+    create_screensaver(cfg);
+    create_preprod(cfg);
+    // Detail/idle share the persistent header
     create_header(cfg);
     create_detail(cfg);
     create_idle();
+    // Start in screensaver; header and other views hidden
+    lv_obj_add_flag(g_header, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_idle,   LV_OBJ_FLAG_HIDDEN);
 
     logger.info("Display thread started.");
 
@@ -769,31 +999,66 @@ void display_thread_func(const Config&      cfg,
                             (s.lcl > 0 && static_cast<double>(s.last_cycle) < s.lcl);
         }
 
-        // Touch detected via indev event callback (set by on_any_press)
+        // ── State machine ────────────────────────────────────────────────────
+
+        // Any touch: reset idle timer, handle state transitions
         if (g_any_press) {
             g_any_press   = false;
             last_activity = now;
-            if (g_mode == Mode::IDLE) {
+            if (g_mode == Mode::SCREENSAVER) {
+                switch_to_preprod();
+                logger.info("Display: touch — screensaver → pre-production");
+            } else if (g_mode == Mode::IDLE) {
                 switch_to_detail();
-                logger.info("Display: touch — switching to detail view");
+                logger.info("Display: touch — idle → detail");
             }
         }
 
-        // Idle timeout — based on inactivity (no touch), not data absence
+        // "URETIME BASLA" button pressed
+        if (g_start_pressed && g_mode == Mode::PRE_PROD) {
+            g_start_pressed = false;
+            cmd_queue.push("START\n");
+            last_activity = now;
+            switch_to_detail();
+            logger.info("Display: production started — START sent to Pico");
+        }
+
+        // "URETIM BITTI" button pressed (header button, visible in DETAIL/IDLE)
+        if (g_stop_pressed && (g_mode == Mode::DETAIL || g_mode == Mode::IDLE)) {
+            g_stop_pressed = false;
+            // Reset display state for next production run
+            g_calib_mean  = 0.0;
+            g_calib_sigma = 0.0;
+            g_calib_saved = false;
+            g_limits_drawn= false;
+            g_last_count  = 0;
+            g_prev_cycle  = 0;
+            g_has_prev    = false;
+            g_was_anomaly = false;
+            switch_to_screensaver();  // also sends STOP\n
+            logger.info("Display: production ended — STOP sent to Pico");
+        }
+
+        // Idle timeout (only in DETAIL mode)
         auto idle_s = std::chrono::duration_cast<std::chrono::seconds>(
             now - last_activity).count();
         if (g_mode == Mode::DETAIL && idle_s >= cfg.idle_timeout_s) {
             switch_to_idle();
-            logger.info("Display: idle timeout — switching to idle view");
+            logger.info("Display: idle timeout → idle view");
         }
 
-        // Header
-        update_clock();
-        update_badge(s);
+        // ── View update ──────────────────────────────────────────────────────
 
-        // View-specific update
-        if (g_mode == Mode::DETAIL) update_detail(s, cfg);
-        else                        update_idle(s);
+        // Header only visible in DETAIL / IDLE
+        bool show_header = (g_mode == Mode::DETAIL || g_mode == Mode::IDLE);
+        if (show_header) {
+            update_clock();
+            update_badge(s);
+        }
+
+        if      (g_mode == Mode::DETAIL) update_detail(s, cfg);
+        else if (g_mode == Mode::IDLE)   update_idle(s);
+        // SCREENSAVER and PRE_PROD are animation-driven — no frame update needed
 
         lv_timer_handler();
         std::this_thread::sleep_for(std::chrono::milliseconds(33));

@@ -9,6 +9,7 @@
 #include "logger.hpp"
 #include "serial_thread.hpp"
 #include "stats_thread.hpp"
+#include "command_queue.hpp"
 
 #ifdef KAIROS_DISPLAY
 #include "display_thread.hpp"
@@ -42,9 +43,10 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    Logger      logger(cfg.log_path);
-    CycleQueue  queue;
-    SharedState state;
+    Logger       logger(cfg.log_path);
+    CycleQueue   queue;
+    SharedState  state;
+    CommandQueue cmd_queue;
 
     logger.info("Kairos starting. port=" + cfg.port +
                 " window=" + std::to_string(cfg.window_size) +
@@ -53,6 +55,7 @@ int main(int argc, char* argv[]) {
 
     std::thread serial_t(serial_thread_func,
                          std::cref(cfg), std::ref(queue),
+                         std::ref(cmd_queue),
                          std::ref(logger), std::ref(g_running));
 
     std::thread stats_t(stats_thread_func,
@@ -63,7 +66,7 @@ int main(int argc, char* argv[]) {
 #ifdef KAIROS_DISPLAY
     // On macOS, SDL2 must run on the main thread (Cocoa requirement).
     // Display runs here; serial and stats run in background threads above.
-    display_thread_func(cfg, state, logger, g_running);
+    display_thread_func(cfg, state, cmd_queue, logger, g_running);
     g_running = false;
     queue.stop();
 #endif
