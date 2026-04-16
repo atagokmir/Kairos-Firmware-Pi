@@ -196,7 +196,7 @@ static void create_header(const Config &cfg) {
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
     // Separator + machine info
-    std::string info = " |  " + cfg.machine_id + "  \xc2\xb7  " + cfg.line_id;
+    std::string info = " |  " + cfg.machine_id + "  |  " + cfg.line_id;
     g_machine_lbl = lbl(hdr, info.c_str(), &lv_font_montserrat_14, C_MUTED);
     lv_obj_align(g_machine_lbl, LV_ALIGN_LEFT_MID, 110, 0);
 
@@ -289,7 +289,7 @@ static void create_detail(const Config &cfg) {
     lv_obj_align(ct4, LV_ALIGN_TOP_LEFT, 0, 0);
 
     char kbuf[64];
-    std::snprintf(kbuf, sizeof(kbuf), "%zu ornek  \xc2\xb7  sabit limit",
+    std::snprintf(kbuf, sizeof(kbuf), "%zu ornek  |  sabit limit",
                   cfg.min_samples);
     g_kalib_info = lbl(c4, kbuf, &lv_font_montserrat_14, C_MUTED);
     lv_obj_align(g_kalib_info, LV_ALIGN_TOP_LEFT, 0, 22);
@@ -317,9 +317,9 @@ static void create_detail(const Config &cfg) {
     lv_obj_set_style_pad_all(ip, 8, 0);
     lv_obj_remove_flag(ip, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl(ip, "I CHART  \xc2\xb7  BIREYSEL DEGERLER", &lv_font_montserrat_14, C_MUTED);
+    lbl(ip, "I CHART  |  BIREYSEL DEGERLER", &lv_font_montserrat_14, C_MUTED);
     // top-right: live ort + sigma
-    g_i_ort_lbl = lbl(ip, "ort: ---  \xc2\xb7  s: ---", &lv_font_montserrat_14, C_MUTED);
+    g_i_ort_lbl = lbl(ip, "ort: ---  |  s: ---", &lv_font_montserrat_14, C_MUTED);
     lv_obj_align(g_i_ort_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
     g_i_chart = lv_chart_create(ip);
@@ -351,7 +351,7 @@ static void create_detail(const Config &cfg) {
     lv_obj_set_style_pad_all(mrp, 8, 0);
     lv_obj_remove_flag(mrp, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl(mrp, "MR CHART  \xc2\xb7  HAREKETLI ARALIK", &lv_font_montserrat_14, C_MUTED);
+    lbl(mrp, "MR CHART  |  HAREKETLI ARALIK", &lv_font_montserrat_14, C_MUTED);
     g_mr_ucl_lbl = lbl(mrp, "UCL_MR: ---", &lv_font_montserrat_14, C_RED);
     lv_obj_align(g_mr_ucl_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
 
@@ -538,7 +538,10 @@ static void update_detail(const Snap &s, const Config &cfg) {
     if (s.limits_locked && g_calib_saved) {
         lv_label_set_text(g_ucl_lbl,    fmt_dsec(s.ucl).c_str());
         lv_label_set_text(g_calib_m_lbl,fmt_dsec(g_calib_mean).c_str());
-        lv_label_set_text(g_lcl_lbl,    fmt_dsec(s.lcl < 0 ? 0 : s.lcl).c_str());
+        if (s.lcl <= 0.0)
+            lv_label_set_text(g_lcl_lbl, "N/A");
+        else
+            lv_label_set_text(g_lcl_lbl, fmt_dsec(s.lcl).c_str());
         lv_label_set_text(g_calib_s_lbl,fmt_dsec(g_calib_sigma).c_str());
     }
 
@@ -559,7 +562,7 @@ static void update_detail(const Snap &s, const Config &cfg) {
     // I chart ort label
     {
         char ob[64];
-        std::snprintf(ob, sizeof(ob), "ort: %.3f s  \xc2\xb7  s: %.3f s",
+        std::snprintf(ob, sizeof(ob), "ort: %.3f s  |  s: %.3f s",
                       s.mean / 1e6, s.sigma / 1e6);
         lv_label_set_text(g_i_ort_lbl, ob);
     }
@@ -583,26 +586,61 @@ static void update_detail(const Snap &s, const Config &cfg) {
         // MR chart (ms scale)
         lv_chart_set_next_value(g_mr_chart, g_mr_data, (int32_t)(mr / 1000));
 
-        if (s.limits_locked) {
-            int32_t ucl_ms = (int32_t)(s.ucl / 1000);
-            int32_t lcl_ms = (int32_t)((s.lcl < 0 ? 0 : s.lcl) / 1000);
-            int32_t margin = std::max(50, (ucl_ms - lcl_ms) / 4);
-            lv_chart_set_range(g_i_chart, LV_CHART_AXIS_PRIMARY_Y,
-                               lcl_ms - margin, ucl_ms + margin);
+        // ── I Chart: data-driven Y range ──────────────────────────────────
+        {
+            auto *ipts = lv_chart_get_y_array(g_i_chart, g_i_data);
+            int32_t dmin = INT32_MAX, dmax = INT32_MIN;
+            for (int i = 0; i < CHART_POINTS; ++i) {
+                auto v = ipts[i];
+                if (v != LV_CHART_POINT_NONE && v > 0) {
+                    dmin = std::min(dmin, (int32_t)v);
+                    dmax = std::max(dmax, (int32_t)v);
+                }
+            }
+            if (dmax > dmin && dmax > 0) {
+                int32_t margin = std::max(30, (dmax - dmin) / 3);
+                int32_t y_min  = std::max(0, dmin - margin);
+                int32_t y_max  = dmax + margin;
+                lv_chart_set_range(g_i_chart, LV_CHART_AXIS_PRIMARY_Y, y_min, y_max);
 
-            int32_t ucl_mr_ms = (int32_t)(s.ucl_mr / 1000);
-            lv_chart_set_range(g_mr_chart, LV_CHART_AXIS_PRIMARY_Y,
-                               0, std::max(50, ucl_mr_ms + ucl_mr_ms/3));
+                // Draw UCL/LCL once, clamped to visible range
+                if (!g_limits_drawn && s.limits_locked) {
+                    int32_t ucl_ms = (int32_t)(s.ucl / 1000);
+                    int32_t lcl_ms = (int32_t)(s.lcl / 1000);
+                    series_const(g_i_chart, g_i_ucl, std::min(ucl_ms, y_max));
+                    if (s.lcl > 0)
+                        series_const(g_i_chart, g_i_lcl, std::max(lcl_ms, y_min));
+                    else {
+                        // LCL negative — hide reference line
+                        auto *pl = lv_chart_get_y_array(g_i_chart, g_i_lcl);
+                        for (int i = 0; i < CHART_POINTS; ++i) pl[i] = LV_CHART_POINT_NONE;
+                    }
+                    g_limits_drawn = true;
+                }
+            }
+        }
 
-            char mb[40];
-            std::snprintf(mb, sizeof(mb), "UCL_MR: %.3f s", s.ucl_mr / 1e6);
-            lv_label_set_text(g_mr_ucl_lbl, mb);
+        // ── MR Chart: data-driven Y range ─────────────────────────────────
+        {
+            auto *mrpts = lv_chart_get_y_array(g_mr_chart, g_mr_data);
+            int32_t mr_max = 0;
+            for (int i = 0; i < CHART_POINTS; ++i)
+                if (mrpts[i] != LV_CHART_POINT_NONE && mrpts[i] > mr_max)
+                    mr_max = mrpts[i];
 
-            if (!g_limits_drawn) {
-                series_const(g_i_chart,  g_i_ucl,  ucl_ms);
-                series_const(g_i_chart,  g_i_lcl,  lcl_ms);
-                series_const(g_mr_chart, g_mr_ucl, ucl_mr_ms);
-                g_limits_drawn = true;
+            if (mr_max > 0) {
+                int32_t ucl_mr_ms = s.limits_locked ? (int32_t)(s.ucl_mr / 1000) : 0;
+                int32_t y_top = std::max({mr_max + mr_max/5, ucl_mr_ms + 20, 50});
+                lv_chart_set_range(g_mr_chart, LV_CHART_AXIS_PRIMARY_Y, 0, y_top);
+
+                if (s.limits_locked) {
+                    // Redraw MR UCL line when data range changes significantly
+                    series_const(g_mr_chart, g_mr_ucl, ucl_mr_ms);
+
+                    char mb[48];
+                    std::snprintf(mb, sizeof(mb), "UCL_MR: %.3f s", s.ucl_mr / 1e6);
+                    lv_label_set_text(g_mr_ucl_lbl, mb);
+                }
             }
         }
 
@@ -735,6 +773,7 @@ void display_thread_func(const Config&      cfg,
             now - last_activity).count();
         if (g_mode == Mode::DETAIL && idle_s >= cfg.idle_timeout_s) {
             switch_to_idle();
+            logger.info("Display: idle timeout — switching to idle view");
         }
 
         // Touch to wake
@@ -742,6 +781,7 @@ void display_thread_func(const Config&      cfg,
             g_touch_flag  = false;
             last_activity = now;
             switch_to_detail();
+            logger.info("Display: touch — switching to detail view");
         }
 
         // Header
