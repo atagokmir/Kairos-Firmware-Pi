@@ -116,7 +116,8 @@ static uint64_t g_last_count  = 0;
 static uint32_t g_prev_cycle  = 0;
 static bool     g_has_prev    = false;
 static bool     g_limits_drawn= false;
-// Touch handled via lv_indev_get_state() polling in display loop
+static bool g_any_press = false;  // set by indev event callback
+static void on_any_press(lv_event_t *) { g_any_press = true; }
 static bool     g_was_anomaly = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -718,6 +719,10 @@ void display_thread_func(const Config&      cfg,
     lv_init();
     platform_init();
 
+    // Register press callback on every input device (event-driven, no polling)
+    for (lv_indev_t *iv = lv_indev_get_next(nullptr); iv; iv = lv_indev_get_next(iv))
+        lv_indev_add_event_cb(iv, on_any_press, LV_EVENT_PRESSED, nullptr);
+
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(C_BG), 0);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
 
@@ -764,19 +769,13 @@ void display_thread_func(const Config&      cfg,
                             (s.lcl > 0 && static_cast<double>(s.last_cycle) < s.lcl);
         }
 
-        // Any touch anywhere resets idle timer and wakes from idle view
-        {
-            lv_indev_t *indev = lv_indev_get_next(nullptr);
-            while (indev) {
-                if (lv_indev_get_state(indev) == LV_INDEV_STATE_PR) {
-                    last_activity = now;
-                    if (g_mode == Mode::IDLE) {
-                        switch_to_detail();
-                        logger.info("Display: touch — switching to detail view");
-                    }
-                    break;
-                }
-                indev = lv_indev_get_next(indev);
+        // Touch detected via indev event callback (set by on_any_press)
+        if (g_any_press) {
+            g_any_press   = false;
+            last_activity = now;
+            if (g_mode == Mode::IDLE) {
+                switch_to_detail();
+                logger.info("Display: touch — switching to detail view");
             }
         }
 
