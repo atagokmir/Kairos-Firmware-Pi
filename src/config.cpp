@@ -37,6 +37,7 @@ Config load_config_file(const std::string& path) {
         else if (key == "machine_id")        cfg.machine_id        = val;
         else if (key == "line_id")           cfg.line_id           = val;
         else if (key == "idle_timeout_s")    try { cfg.idle_timeout_s    = std::stoi(val);  } catch (...) {}
+        else if (key == "autostart")         cfg.autostart = (val == "1" || val == "true");
     }
     return cfg;
 }
@@ -51,5 +52,6 @@ void apply_args(Config& cfg, int argc, char* argv[]) {
         else if (arg == "--summary-interval") { try { cfg.summary_interval  = std::stoul(val); } catch (...) {}   ++i; }
         else if (arg == "--log")              { cfg.log_path          = val;                                       ++i; }
         else if (arg == "--threshold")        { try { cfg.anomaly_threshold = std::stod(val);  } catch (...) {}   ++i; }
+        else if (arg == "--autostart")        { cfg.autostart = true; }
     }
 }

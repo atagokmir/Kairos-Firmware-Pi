@@ -14,6 +14,8 @@ struct Config {
     std::string machine_id        = "MAKINE 01";
     std::string line_id           = "HAT A";
     int         idle_timeout_s    = 35;
+
+    bool        autostart         = false;  // send START to Pico on connect (headless mode)
 };
 
 // Load from INI file. Missing keys use Config defaults.

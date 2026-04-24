@@ -42,6 +42,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(lvgl)
 
+# Exclude LVGL's bundled demos/examples from the default build — we don't use them.
+foreach(_t lvgl_examples lvgl_demos)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+endforeach()
+
 # Remove ARM assembly files from LVGL's source list on macOS.
 # LVGL's custom.cmake uses GLOB_RECURSE to pick up *.S files (Helium/NEON SIMD
 # for Cortex-M55 / Cortex-A). Apple's assembler can't handle GNU ARM syntax.

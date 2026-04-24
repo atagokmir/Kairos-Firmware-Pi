@@ -49,6 +49,11 @@ void serial_thread_func(const Config&      cfg,
         backoff_s = 1;
         logger.info("Serial port opened: " + cfg.port);
 
+        if (cfg.autostart) {
+            ::write(fd, "START\n", 6);
+            logger.info("Serial → Pico: START (autostart)");
+        }
+
         std::string line;
         char        buf[1];
 
